@@ -1,0 +1,70 @@
+<svg width="900" height="420" viewBox="0 0 900 420" xmlns="http://www.w3.org/2000/svg">
+
+<style>
+.box { fill:#f6f8fa; stroke:#4a6fa5; stroke-width:2; rx:8; }
+.label { font-family:Arial, Helvetica, sans-serif; font-size:16px; fill:#2f3e55; text-anchor:middle; }
+.small { font-size:14px; }
+.arrow { stroke:#2f3e55; stroke-width:2; marker-end:url(#arrowhead); }
+</style>
+
+<defs>
+<marker id="arrowhead" markerWidth="10" markerHeight="7"
+refX="10" refY="3.5" orient="auto">
+<polygon points="0 0, 10 3.5, 0 7" fill="#2f3e55"/>
+</marker>
+</defs>
+
+<!-- Internet -->
+<rect class="box" x="80" y="40" width="180" height="60"/>
+<text class="label" x="170" y="75">NTP Server</text>
+
+<!-- SNTP -->
+<rect class="box" x="80" y="140" width="180" height="60"/>
+<text class="label" x="170" y="175">SNTP Client</text>
+
+<!-- Time -->
+<rect class="box" x="80" y="240" width="180" height="60"/>
+<text class="label" x="170" y="275">System Time</text>
+
+<!-- DCF77 frame -->
+<rect class="box" x="350" y="140" width="200" height="60"/>
+<text class="label" x="450" y="175">DCF77 Frame Generator</text>
+
+<!-- DDS -->
+<rect class="box" x="350" y="240" width="200" height="60"/>
+<text class="label" x="450" y="275">DDS Carrier Generator</text>
+
+<!-- DAC -->
+<rect class="box" x="620" y="240" width="160" height="60"/>
+<text class="label" x="700" y="275">DAC</text>
+
+<!-- RF Driver -->
+<rect class="box" x="620" y="320" width="160" height="60"/>
+<text class="label" x="700" y="355">RF Driver</text>
+
+<!-- Antenna -->
+<rect class="box" x="350" y="320" width="200" height="60"/>
+<text class="label" x="450" y="355">Resonant Antenna Coils</text>
+
+<!-- Watches -->
+<rect class="box" x="80" y="320" width="180" height="60"/>
+<text class="label" x="170" y="355">Radio Watches</text>
+
+<!-- Arrows -->
+
+<line class="arrow" x1="170" y1="100" x2="170" y2="140"/>
+<line class="arrow" x1="170" y1="200" x2="170" y2="240"/>
+
+<line class="arrow" x1="260" y1="270" x2="350" y2="170"/>
+
+<line class="arrow" x1="450" y1="200" x2="450" y2="240"/>
+
+<line class="arrow" x1="550" y1="270" x2="620" y2="270"/>
+
+<line class="arrow" x1="700" y1="300" x2="700" y2="320"/>
+
+<line class="arrow" x1="620" y1="350" x2="550" y2="350"/>
+
+<line class="arrow" x1="350" y1="350" x2="260" y2="350"/>
+
+</svg>
