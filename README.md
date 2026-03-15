@@ -183,12 +183,6 @@ Documentation and assembly instructions will be added as the hardware and firmwa
 
 ---
 
-## License
-
-License to be determined.
-
----
-
 ## Contributing
 
 Contributions, ideas, and feedback are welcome.
@@ -207,3 +201,23 @@ feel free to open an issue or start a discussion.
 ## Project Status
 
 TimeNest is currently in **early development**.
+
+## Acknowledgements
+
+Some parts of the project documentation and early concept brainstorming were assisted by AI tools.  
+All hardware, firmware, and mechanical design decisions are reviewed and implemented by the project author.
+
+## License
+
+TimeNest is an open hardware project.
+
+Different parts of the project are licensed under different licenses:
+
+| Component | License |
+|---|---|
+Firmware | MIT License |
+Hardware (schematics, PCB) | CERN-OHL-S v2 |
+Enclosure CAD | CERN-OHL-S v2 |
+Documentation and images | CC BY 4.0 |
+
+See the `LICENSES` folder for full license texts.
