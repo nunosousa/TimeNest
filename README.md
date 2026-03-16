@@ -198,6 +198,77 @@ The result is a compact and efficient system that reliably couples the time sign
 
 ---
 
+## Why Ethernet Instead of Wi-Fi?
+
+TimeNest uses **wired Ethernet** as its network interface instead of Wi-Fi. This was a deliberate design choice based on simplicity, reliability, and the nature of the project.
+
+### Simplicity of Implementation
+
+The primary reason for choosing Ethernet is **system simplicity**.
+
+Supporting Wi-Fi significantly increases firmware and system complexity. A Wi-Fi device must typically implement:
+
+- network discovery and provisioning
+- credential storage and management
+- connection retry logic
+- captive portal or mobile setup workflows
+- security updates and maintenance
+
+In contrast, Ethernet provides a **plug-and-play networking experience**:
+
+1. Connect the cable.
+2. Obtain an IP address via DHCP.
+3. Start synchronizing time.
+
+For a spare-time project, reducing firmware complexity greatly improves development speed and long-term maintainability.
+
+### Reliability
+
+Ethernet also offers **predictable and stable connectivity**. Wired networking avoids common Wi-Fi issues such as:
+
+- RF interference
+- signal dropouts
+- congestion in the 2.4 GHz band
+- router compatibility problems
+
+For a device whose role is to **continuously obtain accurate time from the network**, a stable connection is desirable.
+
+### Timing Considerations
+
+TimeNest synchronizes time over the internet (e.g., via NTP) and generates a **DCF77-compatible time signal**. The required timing accuracy for this application is on the order of **tens of milliseconds**, which both Ethernet and Wi-Fi can easily support.
+
+Therefore, Ethernet was **not chosen for better timing precision**—Wi-Fi would also be sufficient. The decision is instead driven by **simplicity and robustness**.
+
+### Hardware and Firmware Complexity
+
+Adding Wi-Fi would introduce additional hardware and software considerations:
+
+- integration of a radio module
+- antenna placement and RF layout constraints
+- increased firmware stack complexity
+- additional power consumption
+- more complex debugging
+
+Using Ethernet allows the device to remain **architecturally simple and deterministic**, which aligns well with the engineering goals of this project.
+
+### Regulatory Considerations
+
+Ethernet-only devices are treated as **unintentional radiators** from an electromagnetic compatibility (EMC) perspective. Adding Wi-Fi would turn the device into an **intentional RF transmitter**, bringing additional regulatory requirements under radio equipment directives.
+
+While this is mainly relevant if the project were ever commercialized, avoiding an integrated radio simplifies the compliance landscape.
+
+### Product Positioning
+
+Many professional time distribution devices—such as **NTP servers and timing appliances**—use wired networking for the same reasons: reliability, determinism, and simplicity.
+
+TimeNest follows this philosophy by favoring a **stable wired network interface** rather than a wireless one.
+
+---
+
+In short, Ethernet was selected because it provides the **simplest, most reliable, and most maintainable networking solution** for the goals of this project.
+
+---
+
 ## Design Principles
 
 TimeNest is designed as an open hardware project with an emphasis on simplicity, reproducibility, and responsible radio use. The following principles guide the design decisions throughout the project.
