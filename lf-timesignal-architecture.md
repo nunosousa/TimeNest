@@ -11,6 +11,10 @@ with a per-variant BOM (tank capacitor, PLL constants) and firmware build flag.
 This constraint is exploited throughout — in §2, §3 and §6 it removes problems
 rather than adding them.
 
+**Companion documents:**
+- `lf-timesignal-requirements.md` — formal design requirements
+- `lf-timesignal-hardware.md` — schematic blocks, part selection, PCB design
+
 ---
 
 ## 1. Top-level block diagram
@@ -150,6 +154,53 @@ so second boundaries and chip boundaries stay locked forever.
 
 This is the single strongest argument for the per-variant approach.
 
+### DCF77 PM timing, in samples (verified self-consistent)
+
+| Event | Time | Samples @ 1.55 MS/s |
+|---|---|---|
+| 1 carrier cycle | 12.9 µs | 20 |
+| 1 second | 1 s | 1 550 000 |
+| 1 PM chip (120 cycles) | 1.5484 ms | 2 400 |
+| PM start | +200 ms | 310 000 |
+| PM duration (512 chips) | 792.77 ms | 1 228 800 |
+| PM end | +992.77 ms | 1 538 800 |
+| Guard before next second | 7.23 ms | 11 200 |
+| AM drop, bit 0 | 100 ms | 155 000 |
+| AM drop, bit 1 | 200 ms | 310 000 |
+| AM ramp | 1.0 ms | 1 550 |
+
+512 chips at 645.833 Hz = 792.77 ms, starting at +200 ms, ending at +992.77 ms —
+inside the second with 7.23 ms to spare. The +200 ms start is exactly what keeps
+PM clear of the longest AM drop, satisfying the "no phase modulation during the
+amplitude drop" constraint structurally rather than by special-casing.
+
+Every quantity above is an exact integer number of samples.
+
+---
+
+## 3a. Epoch discipline without touching the carrier
+
+A subtle but important consequence of coherent sampling.
+
+The carrier NCO **free-runs and is never steered**. Because f_c = F_s/20 is
+structural, a reference-oscillator error scales the carrier, the chip rate and
+the second length *together* — so a DCF77 chip stays exactly 120 carrier cycles
+no matter how far off the crystal is.
+
+Timing is therefore disciplined in the **event scheduler**, not the oscillator:
+maintain a fractional samples-per-second accumulator (nominally 1 550 000) and
+steer it against GNSS PPS. Because the carrier accumulator is untouched, this
+introduces **no carrier phase glitch** — which would otherwise corrupt PM and
+BPSK, and would be very hard to diagnose.
+
+Consequences:
+- Carrier accuracy requirement is loose (±10 ppm), so the reference is chosen
+  for **holdover stability**, not absolute accuracy.
+- Steering resolution is unlimited (fixed-point remainder), not quantised to
+  whole samples.
+- Never implement discipline by inserting/dropping samples: at 20 samples per
+  cycle, one sample is an 18° phase step.
+
 ---
 
 ## 4. Software layering
@@ -188,6 +239,24 @@ separate, separately-testable code.
 
 GNSS supplies UTC, date and leap-second data (including *pending* leap seconds,
 which is better than NTP's last-day-only leap indicator).
+
+**Holdover is the binding constraint, not acquisition.** Measured budget:
+
+| Reference | Residual | Drift | Reaches 100 ms in |
+|---|---|---|---|
+| Plain XTAL, uncorrected | 30 ppm | 2.6 s/day | 1 hour |
+| Plain XTAL, ppm learned | ~3 ppm | 259 ms/day | 9 hours |
+| TCXO 2 ppm | 2 ppm | 173 ms/day | 14 hours |
+| **TCXO 0.5 ppm** | 0.5 ppm | 43 ms/day | **2.3 days** |
+
+Even a good TCXO holds ±100 ms for only about two days, so **"get one fix at
+setup and run forever" is not viable**. The design answer is duty-cycled GNSS:
+re-acquire hourly (cheap in power, ~seconds of tracking), and treat true
+holdover as a degraded mode specified at ±500 ms over 7 days — which 0.5 ppm
+does meet.
+
+This also means the GNSS antenna should be external and user-placeable, not a
+patch buried in the enclosure.
 
 GNSS does not supply timezone or DST rules — but none of these standards need a
 tzdata database, because each broadcasts exactly one zone under one fixed
@@ -262,6 +331,26 @@ at a few centimetres is a bad trade.
 
 L = 1 mH at 77.5 kHz → ωL = 487 Ω. C = 4.22 nF (C0G).
 For Q = 25, total series R = 19.5 Ω. Ring-down τ = 103 µs. BW = 3.1 kHz.
+
+### Drive requirement — no power amplifier needed
+
+Computed field strength settles this. A 100-turn, 5 cm-radius loop at **10 mA
+peak** sits roughly **65 dB under FCC §15.209** and **70 dB under EN-300-330**-
+style limits, while still delivering a very strong near-field at watch distance.
+
+| Coil current | Drive voltage | Power | Voltage across L |
+|---|---|---|---|
+| 10 mA pk | 0.19 V pk | 1.0 mW | 4.9 V pk |
+| 30 mA pk | 0.58 V pk | 8.8 mW | 14.6 V pk |
+| 50 mA pk | 0.97 V pk | 24.3 mW | 24.3 V pk |
+
+The "linear amplifier" in the original block diagram is therefore just an
+op-amp: 1 mW, 0.19 V peak, and a slew-rate requirement of 0.49 V/µs. Select for
+distortion, not for power.
+
+⚠️ **The voltage across the inductor is Q× the drive** — 24 V peak at 50 mA on a
+5 V system. Rate the tank capacitor ≥50 V. This is the standard resonant-circuit
+trap and the one place in this design where a 5 V assumption will destroy parts.
 
 ### DAC and filter (Full tier only)
 
