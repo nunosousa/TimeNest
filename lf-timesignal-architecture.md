@@ -1,8 +1,15 @@
-# Multi-Standard LF Time-Signal Generator — Architecture Sketch
+# LF Time-Signal Generator — Architecture Sketch
+## (single-standard per build, five variants from one design)
 
-Target: a near-field transmitter that emits DCF77, WWVB, MSF, JJY (40/60) and BPC
-time signals to synchronise consumer radio-controlled watches and clocks, with
-full fidelity including DCF77 phase modulation and WWVB BPSK.
+Target: a near-field transmitter that emits **one** LF time signal — DCF77,
+WWVB, MSF, JJY (40/60) or BPC — to synchronise consumer radio-controlled
+watches and clocks, with full fidelity including DCF77 phase modulation and
+WWVB BPSK.
+
+**The standard is fixed at build time**, not runtime-selectable: one PCB design
+with a per-variant BOM (tank capacitor, PLL constants) and firmware build flag.
+This constraint is exploited throughout — in §2, §3 and §6 it removes problems
+rather than adding them.
 
 ---
 
@@ -41,71 +48,107 @@ the signal now carries simultaneous amplitude *and* phase information.
 
 ---
 
-## 2. Clocking and the sample rate
+## 2. Clocking and the sample rate — **coherent sampling, per variant**
 
-**System clock: 150 MHz** (RP2350 in-spec), sourced from a TCXO into XIN.
+Because each unit is built for **one** standard (see §2a), the system clock and
+sample rate are chosen per variant so that:
 
-**NCO sample rate: Fs = 2.000000 MS/s**, via PIO divider 150/75.
+```
+Fs = N × f_carrier     (N = integer samples per carrier cycle)
+sysclk = M × Fs        (M = integer PIO divider)
+Fs = integer samples per second
+```
 
-Why this pairing matters:
+This is *coherent sampling*, and it is only possible in a single-standard build.
+It is a large simplification — see §3 for why.
 
-- `2 000 000` samples per second is an **integer**, so UTC second boundaries land
-  exactly on sample boundaries. No accumulating fractional-sample error in the
-  symbol scheduler.
-- 2 MS/s gives ~26 samples/cycle at 77.5 kHz. Images sit at Fs±fc ≈ 1.92/2.08 MHz,
-  ~25× above the carrier — trivial to filter.
-- CPU budget: 75 clock cycles per sample. The inner loop (accumulator add, LUT
-  fetch, amplitude multiply, store) is ~12–15 cycles on Cortex-M33. Roughly 20%
-  of one core. Comfortable.
+| Variant | sysclk | PLL (refdiv/fbdiv/VCO/p1/p2) | Fs | N (samp/cycle) | PIO div | cycles/sample |
+|---|---|---|---|---|---|---|
+| DCF77 77.5k | 116.25 MHz | 2 / 155 / 930 MHz / 2 / 4 | 1.550 MS/s | 20 | 75 | 75 |
+| WWVB 60k | 102.00 MHz | 1 / 68 / 816 MHz / 2 / 4 | 1.200 MS/s | 20 | 85 | 85 |
+| MSF 60k | 102.00 MHz | 1 / 68 / 816 MHz / 2 / 4 | 1.200 MS/s | 20 | 85 | 85 |
+| JJY 40k | 100.00 MHz | 1 / 75 / 900 MHz / 3 / 3 | 0.800 MS/s | 20 | 125 | 125 |
+| BPC 68.5k | 102.75 MHz | 2 / 137 / 822 MHz / 2 / 4 | 1.370 MS/s | 20 | 75 | 75 |
 
-Note that integer *division* of the system clock into the carrier is no longer
-required at all — see §3. The 150/2 MHz choice is purely for clean second
-boundaries.
+All verified against RP2350 PLL constraints (VCO 750–1600 MHz, fbdiv 16–320,
+postdiv 1–7). **N = 20 for every variant**, so the sine LUT, the DDS inner loop
+and the DMA block sizing are identical across the whole family — only three
+constants change.
+
+Note that **BPC's awkward prime 137 is no longer a problem**: it is absorbed
+directly into the PLL feedback divider (refdiv 2, fbdiv 137 → 822 MHz VCO). The
+factor that made a runtime-switchable design impossible is free in a
+per-variant one.
+
+Sysclk also drops from 150 MHz to ~100–116 MHz, which reduces power and
+lengthens the per-sample CPU budget.
 
 ---
 
-## 3. The NCO (why this solves multi-standard)
+## 2a. Product variants
 
-32-bit phase accumulator, advanced once per sample:
+One PCB, one firmware tree, per-variant BOM and build flags. Two complexity
+tiers fall out of *which standards carry phase modulation*:
 
-```
-phase     += phase_increment          // frequency
-out_phase  = phase + phase_offset     // phase modulation
-sample     = sine_lut[out_phase >> 20] * amplitude   // amplitude modulation
-```
-
-`phase_increment = round(f_carrier * 2^32 / Fs)`
-
-| Carrier | f (Hz) | phase_increment | residual error |
+| Tier | Standards | Modulation | Signal chain |
 |---|---|---|---|
-| JJY40   | 40 000 | 85 899 345.9 → 85 899 346 | < 0.05 mHz |
-| WWVB/MSF| 60 000 | 128 849 018.9 → 128 849 019 | < 0.05 mHz |
-| BPC     | 68 500 | 147 089 592.3 → 147 089 592 | < 0.2 mHz |
-| DCF77   | 77 500 | 166 429 982.7 → 166 429 983 | < 0.2 mHz |
+| **Full** | DCF77, WWVB | AM **+ phase** (PRBS / BPSK) | NCO → R-2R → LPF → linear driver |
+| **Simple** | MSF, JJY, BPC | AM / OOK only | PIO square wave → keying → tank |
 
-All well under 5 ppb — three orders of magnitude better than the TCXO itself,
-so the crystal dominates and the NCO contributes nothing.
+The Simple tier needs no DAC, no linear amplifier and no reconstruction filter —
+a PIO square wave into a tuned tank with switched drive is sufficient, because
+there is no phase information to preserve. That is a materially cheaper kit.
 
-**This is the key architectural decision.** A divide-the-system-clock design
-cannot do this: 68.5 kHz contains the prime factor 137, which pushes the LCM of
-all five carriers to 509.64 MHz — unreachable on this silicon. The NCO makes
-carrier frequency a runtime register value.
+**Recommendation: lay out one PCB that supports both**, with the R-2R ladder,
+filter and linear driver as do-not-populate options on Simple-tier builds. Two
+separate PCB designs would double layout, inventory and test-fixture work to
+save a few euro of parts.
 
-It also makes both modulations trivial:
-- **PM/BPSK** = add to `phase_offset` (±15.6° for DCF77, 180° for WWVB).
-- **AM** = scale `amplitude` (15% DCF77, −17 dB ≈ 14.1% WWVB, 0% MSF, ~10% JJY),
-  with free soft ramps to limit splatter.
+Per-variant differences are then: crystal/PLL constants, tank capacitor,
+firmware build flag, silkscreen, and test limits.
 
-### Deriving the DCF77 chip clock correctly
+---
 
-DCF77's PM chip rate is 645.83 Hz = fc/120, i.e. **one chip per 120 carrier
-cycles**. At 2 MS/s a chip is 3096.774 samples — *not* an integer, so counting
-samples will drift.
+## 3. The NCO — now *coherent*, which removes two problems
 
-Instead, derive chip boundaries from the NCO itself: count accumulator
-overflows (= carrier cycles) and advance the PRBS every 120th. This is exact by
-construction and self-aligning, because the chip rate is *defined* as a division
-of the carrier.
+With Fs locked to an integer multiple of the carrier (N = 20), the NCO stops
+being a general-purpose DDS and becomes something much simpler and more exact.
+
+**The phase accumulator no longer accumulates error.** With N = 20 samples per
+cycle, the carrier phase advances by exactly 1/20 turn per sample. A 20-entry
+sine table *is* the carrier. There is no phase truncation, no fractional
+residual, and therefore **no DDS phase-truncation spurs** — which were the main
+spectral risk of the original design.
+
+Keep a 32-bit accumulator anyway (it costs nothing and preserves the ability to
+trim frequency for calibration), but the steady-state increment is now the exact
+value `2^32 / 20`, and the arithmetic closes perfectly every 20 samples.
+
+Modulation is unchanged and still trivial:
+- **PM/BPSK** = add to `phase_offset` (±15.6° DCF77, 180° WWVB)
+- **AM** = scale `amplitude` (15% DCF77, −17 dB ≈ 14.1% WWVB, 0% MSF, ~10% JJY)
+
+Because a full carrier cycle is exactly 20 samples, a 180° BPSK reversal is
+exactly a 10-sample index offset, and DCF77's ±15.6° needs interpolation or a
+slightly larger LUT (a 256-entry table indexed by the accumulator's high bits
+handles both cleanly).
+
+### The DCF77 chip-alignment problem disappears
+
+Previously flagged as a trap: at 2 MS/s a DCF77 PM chip was 3096.774 samples —
+not an integer — so a sample counter would drift against the chip clock.
+
+With coherent sampling this vanishes:
+
+```
+chip = 120 carrier cycles × 20 samples/cycle = 2400 samples, exactly
+```
+
+No overflow-counting workaround, no drift, no self-aligning trickery. A plain
+sample counter is now exact. Similarly one second = 1 550 000 samples exactly,
+so second boundaries and chip boundaries stay locked forever.
+
+This is the single strongest argument for the per-variant approach.
 
 ---
 
@@ -169,40 +212,66 @@ classic "works all year, fails twice a year" defects.*
 
 ---
 
-## 6. Output stage
+## 6. Output stage — now tuned, but *not* high-Q
 
-### Recommendation: untuned (or lightly damped) loop
+Per-variant tuning removes the objections that forced an untuned loop in the
+runtime-switchable design: a single fixed resonant frequency means **no switched
+capacitor bank and no per-band phase calibration**. So yes — resonate.
 
-A resonant tank is the obvious choice and the wrong one here:
+The question becomes *how high a Q*, and there are two independent ceilings.
 
-- DCF77 PM at a 645.83 Hz chip rate needs roughly ±1.5–2 kHz of passband.
-  Q=100 at 77.5 kHz gives only 775 Hz — it smears the chips.
-- MSF is true OOK (carrier fully off); a high-Q tank rings instead of stopping.
-- Five carriers spanning 40–77.5 kHz would need a switched capacitor bank, and
-  each band would have a different phase response to calibrate out.
+### Ceiling 1 — modulation bandwidth
 
-Since range is deliberately only a few centimetres, radiation efficiency is
-irrelevant — so drive a small **untuned** loop as a current source. Flat from 40
-to 77.5 kHz, zero phase distortion, no band-switching hardware, and it helps
-rather than hurts regulatory compliance. Compensate the per-band impedance
-difference (loop Z rises with frequency) with a per-standard amplitude constant
-in firmware.
+`BW = f0 / Q`, ring-down `τ = Q / (π·f0)`.
 
-All spectral cleanup then falls to the reconstruction LPF (3rd-order, ~120 kHz).
+| Variant | Constraint | Required BW | Q ceiling |
+|---|---|---|---|
+| DCF77 | PM chips at 645.83 Hz | ≳ 3 kHz | **~25** |
+| WWVB | BPSK reversal, 1 baud | transient ≪ 1 s | ~100 |
+| MSF | OOK, 100 ms off | ring-down ≪ 100 ms | ~100 |
+| JJY / BPC | AM, ≥ 200 ms | loose | ~100 |
 
-If more range is ever needed, add an optional switched-C bank targeting a
-**deliberately low Q of 10–25** — never higher.
+Only DCF77 is genuinely tight. At Q = 25 its ring-down is 103 µs — negligible
+against a 100 ms AM step, while still passing the phase chips.
 
-Worked example if you do resonate: L = 1 mH at 77.5 kHz → ωL = 487 Ω;
-C = 4.22 nF; for Q = 20, total series R = 24 Ω.
+### Ceiling 2 — manufacturability (this is the binding one for a kit)
 
-### DAC
+At Q = 50 and 77.5 kHz the passband is 1550 Hz. A ±5% capacitor shifts
+resonance by ~2.5%, i.e. ~1900 Hz — **further than the bandwidth is wide**. The
+unit would ship detuned off its own peak.
 
-10-bit R-2R on GPIO, PIO+DMA driven. Prototype with 0.1% resistors (1% parts
-give only ~7 effective bits, and the −17 dB WWVB level wants ~1% amplitude
-accuracy). Note that **phase resolution lives in the NCO, not the DAC** — DAC
-bits only bound amplitude accuracy and spurious floor. For production, evaluate
-a monolithic parallel DAC for repeatability.
+High Q therefore forces either 1% C0G capacitors *and* a per-unit tuning step,
+or a trimmer the customer must adjust with test gear they don't own. For a kit,
+that is a support disaster.
+
+**Q ≈ 20–25 is the sweet spot, and it is the same answer for every variant.**
+It satisfies DCF77's phase modulation, tolerates ±2–3% component spread with no
+per-unit tuning, and keeps one Q target across the whole product family.
+
+Use **C0G/NP0 capacitors** regardless — X7R's temperature and DC-bias drift
+would detune the tank across the operating range.
+
+### Don't over-value the range gain
+
+Field strength in a series-resonant loop scales with Q, but near-field coupling
+falls as 1/r³. So going Q = 25 → 100 (4× current) buys only ∛4 ≈ **1.6× range**.
+Paying for per-unit tuning to gain 60% more distance on a device meant to work
+at a few centimetres is a bad trade.
+
+### Worked example (DCF77)
+
+L = 1 mH at 77.5 kHz → ωL = 487 Ω. C = 4.22 nF (C0G).
+For Q = 25, total series R = 19.5 Ω. Ring-down τ = 103 µs. BW = 3.1 kHz.
+
+### DAC and filter (Full tier only)
+
+10-bit R-2R, PIO+DMA driven, 0.1% resistors (1% parts give ~7 effective bits;
+WWVB's −17 dB level wants ~1% amplitude accuracy). Reconstruction LPF at
+~120 kHz. Phase resolution lives in the NCO, not the DAC — DAC bits bound only
+amplitude accuracy and the spurious floor.
+
+Simple-tier variants (MSF/JJY/BPC) omit all of this: PIO square wave → keyed
+drive → tank. The tank's own selectivity suppresses the square wave's harmonics.
 
 ---
 
@@ -221,20 +290,30 @@ a monolithic parallel DAC for repeatability.
 | Optional band-select switches | 3 |
 | **Total** | **~21–24** |
 
-Fits the 30-GPIO QFN-60 package with margin.
+Fits the 30-GPIO QFN-60 package with margin. Simple-tier variants free the 10
+R-2R pins, leaving room for a cheaper/smaller package if a cost-reduced SKU is
+ever wanted.
 
 ---
 
-## 8. Standard selection and UX
+## 8. Configuration and UX
 
-- Small OLED + rotary encoder, or USB-C serial config, or both.
-- Config in flash: standard, TX power trim, DST rule parameters, learned TCXO ppm.
-- Consider a "transmit window" scheduler: most radio-controlled watches only
-  attempt sync overnight (typically 02:00–04:00), so the device can idle most of
-  the day. This cuts duty cycle, power, and regulatory exposure — and is a
-  genuine product feature ("only radiates 20 minutes a night").
+The standard is **fixed at build time** (BOM + firmware flag), so there is no
+runtime standard selector. What remains configurable in flash:
+
+- TX power trim, DST rule parameters, learned TCXO ppm, transmit window.
+- No OLED/encoder needed for standard selection — a status LED plus USB-C serial
+  config is sufficient, which cuts BOM and enclosure cost.
+- **Transmit window scheduler**: most radio-controlled watches only attempt sync
+  overnight (typically 02:00–04:00), so the device can idle most of the day.
+  Cuts duty cycle, power and regulatory exposure — and is a genuine product
+  feature ("only radiates 20 minutes a night").
 - Provide a manual "sync now" button for watches that support forced receive;
   without it, development iterations take hours.
+- **Have the firmware refuse to run if the build flag and a hardware strap
+  disagree.** A DCF77 board flashed with WWVB firmware would transmit off-tune
+  into a Q=25 tank and mostly just not work — an expensive support ticket.
+  A single resistor strap per variant makes this self-detecting.
 
 ---
 
@@ -250,6 +329,10 @@ Fits the 30-GPIO QFN-60 package with margin.
   standard, checked bit-for-bit against published examples.
 - **Sweep the DST engine across ~20 years** of transitions in unit tests,
   including the leap-second and announce-bit edges.
+- **Per-variant production test**: sweep the tank and confirm resonance lands
+  within ±1% of target. Cheap to automate with the same audio interface, and it
+  is the one build defect (wrong/out-of-tolerance capacitor) most likely to
+  escape a kit builder.
 
 ---
 
@@ -257,27 +340,40 @@ Fits the 30-GPIO QFN-60 package with margin.
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| Regulatory compliance for sale | **High** | Near-field by design; engage a compliance consultant early; consider positioning as test equipment; pre-scan EMC before layout freeze |
+| Regulatory compliance **per variant per region** | **High** | Each variant is a separate frequency in a separate jurisdiction — FCC (WWVB), CE/UKCA (DCF77/MSF), MIC (JJY, notoriously strict). Cost multiplies per variant, so launch **one** variant first and treat others as gated business decisions, not engineering tasks |
 | GNSS never gets a fix indoors | High | RTC holdover + learned TCXO correction; only needs one fix at setup; USB time-set fallback |
+| Kit builder mis-tunes or mis-stuffs the tank | Medium | Q≈25 tolerates ±2–3% spread; ship pre-matched L/C pair; hardware strap + firmware self-check |
 | DCF77 PRBS spec details (sequence, start offset within the second) | Medium | Obtain PTB specification before committing to layer-2 design |
 | WWVB BPSK +0.1 s offset implemented wrong | Medium | Breaks BPSK receivers while AM ones still work — looks intermittent. Cover with golden vectors |
-| R-2R amplitude accuracy | Low | 0.1% resistors, or monolithic DAC in production |
+| R-2R amplitude accuracy (Full tier only) | Low | 0.1% resistors, or monolithic DAC in production |
 | GPS week rollover | Low | Current module firmware; handle epoch explicitly |
 | BPC spec availability (Chinese-language sources) | Low | Defer to last; lowest commercial value |
+
+Note that selling a **kit** rather than a finished product does not reliably
+reduce regulatory obligation — do not assume it does without advice.
 
 ---
 
 ## 11. Phased roadmap
 
+Build **one variant end-to-end** before generalising. DCF77 first: it is your
+own use case and it is the hardest (phase modulation + tightest Q ceiling), so
+it validates every constraint the other variants will face.
+
 | Phase | Goal | Proves |
 |---|---|---|
 | P0 | DCF77 AM only, square wave into a coil, time hardcoded | A watch actually syncs — de-risks the whole product in a weekend |
-| P1 | NCO + R-2R + LPF + linear driver, DCF77 AM | Signal chain and CPU budget |
-| P2 | DCF77 phase modulation | Hardest DSP; validates the low-Q/untuned decision |
-| P3 | WWVB (incl. BPSK), MSF, JJY | Layer-2 abstraction actually holds |
-| P4 | GNSS + PPS discipline + RTC holdover + DST engine | Standalone operation |
-| P5 | Enclosure, UI, config, compliance | Sellable |
-| P6 | BPC | Completeness |
+| P1 | NCO + R-2R + LPF + linear driver + Q≈25 tank, DCF77 AM | Coherent-sampling signal chain and CPU budget |
+| P2 | DCF77 phase modulation | Hardest DSP; validates the Q≈25 ceiling |
+| P3 | GNSS + PPS discipline + RTC holdover + DST engine | Standalone operation — **first sellable product** |
+| P4 | Second variant (WWVB or MSF) | Layer-2 abstraction and the per-variant BOM actually hold |
+| P5 | Enclosure, config, per-region compliance | Sellable abroad |
+| P6 | JJY, BPC | Completeness |
+
+Compared with the runtime-switchable plan, GNSS/DST moves **earlier** (it is
+needed for a shippable single-standard unit) and multi-standard work moves
+**later** (it is now a business decision gated on compliance cost, not a
+prerequisite).
 
 Do P0 first and separately. It is a few hours of work and it answers the only
 question that really matters: do your watches sync to a locally generated
